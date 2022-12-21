@@ -4,21 +4,31 @@ from prometheus_client import Gauge, start_http_server
 ENC = "utf-8"
 HOSTNAME = (subprocess.check_output("hostname").splitlines()[0]).decode(ENC)
 TOP_CMD = "top -bn1".split()
+DF_CMD = "df"
+INVALID_CHARS = [
+    "/",
+    "\\",
+    "_",
+]
 
 
 def _sanitize(string: str) -> str:
-    string = string.replace("/", ".")
-    string = string.replace("\\", ".")
-    string = string.replace("_", ".")
+    for char in string:
+        if char in INVALID_CHARS:
+            return _sanitize(string.replace(char, "."))
 
     return string
 
 
-def _get_metric_name(subtype: str, unit: str) -> str:
+def _get_metric_name(subtype: str, unit: str, subunit: str = None) -> str:
     subtype = _sanitize(subtype)
     unit = _sanitize(unit)
 
-    return f"{HOSTNAME}_{subtype}_{unit}"
+    name = f"{HOSTNAME}_{subtype}_{unit}"
+    if subunit:
+        name += f"_{subunit}"
+
+    return name
 
 
 def _get_top_data() -> dict:
@@ -58,6 +68,31 @@ def _get_top_data() -> dict:
     return result
 
 
+def _get_df_data() -> dict:
+    output = subprocess.check_output(DF_CMD)
+    result = {}
+    for line in output.splitlines():
+        decoded = line.decode(ENC)
+        if "Filesystem" not in decoded:
+            columns = decoded.split()
+            filesystem = columns[0]
+            used = int(columns[2])
+            available = int(columns[3])
+            total = used + available
+            percentage = used / total
+            result[
+                _get_metric_name(subtype="filesystem", unit=filesystem, subunit="used")
+            ] = used
+            result[
+                _get_metric_name(subtype="filesystem", unit=filesystem, subunit="free")
+            ] = available
+            result[
+                _get_metric_name(subtype="filesystem", unit=filesystem, subunit="perc")
+            ] = percentage
+    return result
+
+
 if __name__ == "__main__":
-    result = _get_top_data()
-    print(result)
+    result = _get_df_data()
+    for key in result.keys():
+        print(f"{key}:{result[key]}")
